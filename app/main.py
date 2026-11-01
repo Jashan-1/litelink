@@ -40,6 +40,15 @@ class LinkOut(BaseModel):
     status: str
 
 
+class PublicLinkOut(BaseModel):
+    """The minimum information needed for the frontend's visitor status pages."""
+
+    slug: str
+    status: str
+    target_url: str | None = None
+    reasons: list[str] = []
+
+
 def new_slug() -> str:
     return "".join(secrets.choice(SLUG_ALPHABET) for _ in range(SLUG_LENGTH))
 
@@ -114,6 +123,20 @@ async def list_links(
     user: User = Depends(auth.current_user), session: AsyncSession = Depends(get_session)
 ) -> list[LinkOut]:
     return [to_output(link) for link in await recent_links(session, user)]
+
+
+@app.get("/api/public/links/{slug}")
+async def public_link(slug: str, session: AsyncSession = Depends(get_session)) -> PublicLinkOut:
+    """Public scan state without exposing a safe destination before it is needed."""
+    link = await session.scalar(select(Link).where(Link.slug == slug))
+    if link is None or link.status == "disabled":
+        raise HTTPException(404, "Link not found.")
+    if link.status == "review":
+        return PublicLinkOut(slug=link.slug, status=link.status, target_url=link.target_url)
+    if link.status == "blocked":
+        latest = await session.scalar(select(Scan).where(Scan.link_id == link.id).order_by(Scan.id.desc()).limit(1))
+        return PublicLinkOut(slug=link.slug, status=link.status, reasons=latest.reasons if latest else [])
+    return PublicLinkOut(slug=link.slug, status=link.status)
 
 
 # Must stay last: it matches every other single-segment path.
